@@ -1,9 +1,13 @@
 const express = require('express');
 const Task = require('../models/task');
+const auth = require('../middleware/auth');
 const router = new express.Router();
 
-router.post('/tasks', async (req, res) => {
-    const task = new Task(req.body);
+router.post('/tasks', auth, async (req, res) => {
+    const task = new Task({
+        ...req.body,
+        owner: req.user._id
+    });
     try {
         const taskSaved = await task.save();
         res.status(201).send(taskSaved);
@@ -12,22 +16,48 @@ router.post('/tasks', async (req, res) => {
     }
 });
 
-router.get('/tasks', async (req, res) => {
+//?limit=10&skip=3
+//sortBy=createdAt[modified]:asc[desc]
+router.get('/tasks', auth, async (req, res) => {
+    const isCompleted = req.query.completed;
+    const limit = req.query.limit;
+    const skip = req.query.skip;
+
+    const match = {};
+    const sort = {};
+
+    if (isCompleted) {
+        match.completed = isCompleted === 'true';
+    }
+
+    if (req.query.sortBy) {
+        const parts = req.query.sortBy.split(':');
+        sort[parts[0]] = parts[1] === 'asc' ? 1 : -1;
+    }
+
     try {
-        const tasks = await Task.find({});
-        res.send(tasks);
+
+        await req.user.populate({
+            path: 'tasks',
+            match,
+            options: {
+                limit: parseInt(limit),
+                skip: parseInt(skip),
+                sort
+            }
+        }).execPopulate();
+        res.send(req.user.tasks);
     } catch (e) {
         res.status(500).send(e);
     }
 });
 
-router.get('/tasks/:id', async (req, res) => {
+router.get('/tasks/:id', auth, async (req, res) => {
+    const _id = req.params.id;
     try {
-        const _id = req.params.id;
-        const task = await Task.findById(_id);
-        console.log(task);
-        if (task === null) {
-            return res.status(404).send();
+        const task = await Task.findOne({_id, owner: req.user._id});
+        if (!task) {
+            return res.status(404).send({error: 'A task not found'});
         }
         res.send(task);
     } catch (e) {
@@ -36,7 +66,7 @@ router.get('/tasks/:id', async (req, res) => {
 
 });
 
-router.patch('/tasks/:id', async (req, res) => {
+router.patch('/tasks/:id', auth, async (req, res) => {
     const requestedParams = Object.keys(req.body);
     const allowedParams = ['description', 'completed'];
     const isUpdateAllowed = requestedParams.every((item) => {
@@ -47,8 +77,7 @@ router.patch('/tasks/:id', async (req, res) => {
         return res.status(400).send({error: 'updated is not allowed'});
     }
     try {
-        // const task = await Task.findByIdAndUpdate(req.params.id, req.body, {new: true, runValidators: true});
-        const task = await Task.findById(req.params.id);
+        const task = await Task.findOne({_id: req.params.id, owner: req.user._id});
 
         if (!task) {
             return res.status(404).send({error: 'Record not found. No changes were applied'})
@@ -63,11 +92,11 @@ router.patch('/tasks/:id', async (req, res) => {
     }
 });
 
-router.delete('/tasks/:id', async (req, res) => {
+router.delete('/tasks/:id', auth, async (req, res) => {
     try {
-        const task = await Task.findByIdAndDelete(req.params.id);
+        const task = await Task.findOneAndDelete({_id: req.params.id, owner: req.user._id});
         if (!task) {
-            return res.status(404).send('A record not found');
+            return res.status(404).send('The record not found');
         }
         res.send(task);
     } catch (e) {
